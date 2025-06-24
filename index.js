@@ -10,17 +10,16 @@ const {
   ROUTER_ADDRESS,
   TOKEN_IN,
   TOKEN_OUT,
+  AMOUNT_TO_SWAP, // <- dari .env misalnya "0.005"
 } = process.env;
 
 const provider = new ethers.providers.JsonRpcProvider(RPC_URL);
 const privateKeys = PRIVATE_KEYS.split(",");
 
-// Router ABI (Uniswap V2-like)
+// ABIs
 const ROUTER_ABI = [
   "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory)",
 ];
-
-// ERC20 minimal ABI
 const ERC20_ABI = [
   "function approve(address spender, uint amount) external returns (bool)",
   "function allowance(address owner, address spender) external view returns (uint)",
@@ -28,33 +27,17 @@ const ERC20_ABI = [
   "function decimals() external view returns (uint8)"
 ];
 
-// Setting swap
-const AMOUNT_TO_SWAP = "1"; // tokenIn amount (as string)
-const SWAP_COUNT = 5;       // total swap per wallet
-const DELAY_MS = 4000;      // delay antar swap (ms)
-
-// Delay function
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-async function checkBalance(token, wallet, minAmount) {
-  const balance = await token.balanceOf(wallet.address);
-  if (balance.lt(minAmount)) {
-    console.log(`⛔ [${wallet.address}] Saldo tidak cukup: ${ethers.utils.formatUnits(balance)} token`);
-    return false;
-  }
-  return true;
-}
+// Settings
+const SWAP_COUNT = 5;
+const DELAY_MS = 4000;
+const delay = ms => new Promise(res => setTimeout(res, ms));
 
 async function performSwap(wallet, router, tokenIn, tokenOut) {
   const decimals = await tokenIn.decimals();
   const amountIn = ethers.utils.parseUnits(AMOUNT_TO_SWAP, decimals);
-  const minAmountOut = 0; // tidak peduli slippage (testnet only)
+  const minAmountOut = 0; // bebas slippage (testnet only)
 
-  // Cek saldo
-  const hasBalance = await checkBalance(tokenIn, wallet, amountIn);
-  if (!hasBalance) return;
-
-  // Cek allowance & approve jika perlu
+  // Auto approve kalau belum cukup
   const allowance = await tokenIn.allowance(wallet.address, router.address);
   if (allowance.lt(amountIn)) {
     console.log(`🔓 [${wallet.address}] Approving token...`);
@@ -63,22 +46,24 @@ async function performSwap(wallet, router, tokenIn, tokenOut) {
     console.log(`✅ [${wallet.address}] Token approved`);
   }
 
-  // Lakukan swap
   const path = [tokenIn.address, tokenOut.address];
-  const deadline = Math.floor(Date.now() / 1000) + 1800; // 30 menit
+  const deadline = Math.floor(Date.now() / 1000) + 1800;
 
-  const tx = await router.swapExactTokensForTokens(
-    amountIn,
-    minAmountOut,
-    path,
-    wallet.address,
-    deadline,
-    { gasLimit: 300000 }
-  );
-
-  console.log(`🔁 [${wallet.address}] Swap sent: ${tx.hash}`);
-  const receipt = await tx.wait();
-  console.log(`✅ [${wallet.address}] Swap confirmed in block ${receipt.blockNumber}`);
+  try {
+    const tx = await router.swapExactTokensForTokens(
+      amountIn,
+      minAmountOut,
+      path,
+      wallet.address,
+      deadline,
+      { gasLimit: 300000 }
+    );
+    console.log(`🔁 [${wallet.address}] Swap ${AMOUNT_TO_SWAP} sent: ${tx.hash}`);
+    const receipt = await tx.wait();
+    console.log(`✅ Swap sukses di blok ${receipt.blockNumber}`);
+  } catch (err) {
+    console.error(`❌ Gagal swap:`, err.message);
+  }
 }
 
 async function main() {
@@ -92,11 +77,7 @@ async function main() {
 
     for (let i = 0; i < SWAP_COUNT; i++) {
       console.log(`\n🚀 Swap ke-${i + 1} untuk ${wallet.address}`);
-      try {
-        await performSwap(wallet, router, tokenIn, tokenOut);
-      } catch (err) {
-        console.error(`❌ Gagal swap ke-${i + 1}:`, err.message);
-      }
+      await performSwap(wallet, router, tokenIn, tokenOut);
       await delay(DELAY_MS);
     }
   }
