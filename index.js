@@ -1,107 +1,89 @@
+
 import { ethers } from "ethers";
 import dotenv from "dotenv";
+
 dotenv.config();
 
-const routerAbi = [
-  {
-    name: "swapExactTokensForTokens",
-    type: "function",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "amountIn", type: "uint256" },
-      { name: "amountOutMin", type: "uint256" },
-      { name: "path", type: "address[]" },
-      { name: "to", type: "address" },
-      { name: "deadline", type: "uint256" }
-    ],
-    outputs: [{ name: "amounts", type: "uint256[]" }]
-  },
-  {
-    name: "swapExactETHForTokens",
-    type: "function",
-    stateMutability: "payable",
-    inputs: [
-      { name: "amountOutMin", type: "uint256" },
-      { name: "path", type: "address[]" },
-      { name: "to", type: "address" },
-      { name: "deadline", type: "uint256" }
-    ],
-    outputs: [{ name: "amounts", type: "uint256[]" }]
-  },
-  {
-    name: "swapExactTokensForETH",
-    type: "function",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "amountIn", type: "uint256" },
-      { name: "amountOutMin", type: "uint256" },
-      { name: "path", type: "address[]" },
-      { name: "to", type: "address" },
-      { name: "deadline", type: "uint256" }
-    ],
-    outputs: [{ name: "amounts", type: "uint256[]" }]
-  }
+const {
+  RPC_URL,
+  PRIVATE_KEYS,
+  ROUTER_ADDRESS,
+  TOKEN_IN,
+  TOKEN_OUT,
+} = process.env;
+
+const provider = new ethers.providers.JsonRpcProvider(RPC_URL);
+const privateKeys = PRIVATE_KEYS.split(",");
+
+// ABI router Uniswap-like
+const ROUTER_ABI = [
+  "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory)",
 ];
 
-const ETH_PLACEHOLDER = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+// Token approve ABI
+const ERC20_ABI = [
+  "function approve(address spender, uint amount) external returns (bool)",
+  "function allowance(address owner, address spender) external view returns (uint)",
+  "function balanceOf(address account) external view returns (uint)",
+  "function decimals() view returns (uint8)",
+];
 
-async function swapForWallet(privateKey) {
-  const provider = new ethers.JsonRpcProvider(process.env.MEGAETH_RPC_URL);
-  const wallet = new ethers.Wallet(privateKey, provider);
-  const router = new ethers.Contract(process.env.GTE_ROUTER_ADDRESS, routerAbi, wallet);
+const AMOUNT_TO_SWAP = "1"; // jumlah tokenIn yang di-swap
+const SLIPPAGE = 0.05; // 5%
+const SWAP_COUNT = 5; // jumlah swap per akun
+const DELAY_MS = 5000;
 
-  const tokenIn = process.env.TOKEN_IN_ADDRESS.toLowerCase();
-  const tokenOut = process.env.TOKEN_OUT_ADDRESS.toLowerCase();
-  const isETHIn = tokenIn === ETH_PLACEHOLDER;
-  const isETHOut = tokenOut === ETH_PLACEHOLDER;
-  const decimals = parseInt(process.env.TOKEN_IN_DECIMALS);
-  const amountIn = ethers.parseUnits(process.env.AMOUNT_IN, decimals);
-  const deadline = Math.floor(Date.now() / 1000) + 60 * 10;
-  const path = isETHIn
-    ? [ethers.ZeroAddress, tokenOut]
-    : isETHOut
-    ? [tokenIn, ethers.ZeroAddress]
-    : [tokenIn, tokenOut];
+const delay = ms => new Promise(res => setTimeout(res, ms));
 
-  console.log(`🚀 Swap untuk wallet: ${wallet.address}`);
+async function performSwap(wallet, router, tokenIn, tokenOut) {
+  const decimals = await tokenIn.decimals();
+  const amountIn = ethers.utils.parseUnits(AMOUNT_TO_SWAP, decimals);
+  const minAmountOut = amountIn.sub(amountIn.mul(SLIPPAGE * 100).div(100));
 
-  try {
-    if (!isETHIn) {
-      const erc20Abi = ["function approve(address spender, uint256 amount) external returns (bool)"];
-      const tokenContract = new ethers.Contract(tokenIn, erc20Abi, wallet);
-      const approveTx = await tokenContract.approve(process.env.GTE_ROUTER_ADDRESS, amountIn);
-      console.log(`✅ Approve TX: ${approveTx.hash}`);
-      await approveTx.wait();
-    }
-
-    let tx;
-    if (isETHIn) {
-      tx = await router.swapExactETHForTokens(0, path, wallet.address, deadline, {
-        value: amountIn,
-        gasLimit: 300000
-      });
-    } else if (isETHOut) {
-      tx = await router.swapExactTokensForETH(amountIn, 0, path, wallet.address, deadline, {
-        gasLimit: 300000
-      });
-    } else {
-      tx = await router.swapExactTokensForTokens(amountIn, 0, path, wallet.address, deadline, {
-        gasLimit: 300000
-      });
-    }
-
-    console.log(`🔁 Swap TX: ${tx.hash}`);
-    const receipt = await tx.wait();
-    console.log(`✅ Berhasil swap pada block: ${receipt.blockNumber}\n`);
-  } catch (error) {
-    console.error(`❌ Gagal untuk ${wallet.address}:`, error.message);
+  // Approve token if needed
+  const allowance = await tokenIn.allowance(wallet.address, router.address);
+  if (allowance.lt(amountIn)) {
+    const approveTx = await tokenIn.approve(router.address, ethers.constants.MaxUint256);
+    console.log(`🟡 [${wallet.address}] Approving token...`);
+    await approveTx.wait();
+    console.log(`✅ [${wallet.address}] Token approved`);
   }
+
+  const path = [tokenIn.address, tokenOut.address];
+  const deadline = Math.floor(Date.now() / 1000) + 1800; // 30 menit
+
+  const tx = await router.swapExactTokensForTokens(
+    amountIn,
+    minAmountOut,
+    path,
+    wallet.address,
+    deadline,
+    { gasLimit: 400000 }
+  );
+
+  console.log(`🔁 [${wallet.address}] Swap sent: ${tx.hash}`);
+  const receipt = await tx.wait();
+  console.log(`✅ [${wallet.address}] Swap confirmed in block ${receipt.blockNumber}`);
 }
 
 async function main() {
-  const privateKeys = process.env.PRIVATE_KEYS.split(",");
   for (const pk of privateKeys) {
-    await swapForWallet(pk.trim());
+    const wallet = new ethers.Wallet(pk, provider);
+    console.log(`\n🔐 Menggunakan akun: ${wallet.address}`);
+
+    const tokenIn = new ethers.Contract(TOKEN_IN, ERC20_ABI, wallet);
+    const tokenOut = new ethers.Contract(TOKEN_OUT, ERC20_ABI, wallet);
+    const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, wallet);
+
+    for (let i = 0; i < SWAP_COUNT; i++) {
+      console.log(`🚀 Swap ke-${i + 1} untuk ${wallet.address}`);
+      try {
+        await performSwap(wallet, router, tokenIn, tokenOut);
+      } catch (err) {
+        console.error(`❌ Gagal swap ke-${i + 1}:`, err.message);
+      }
+      await delay(DELAY_MS);
+    }
   }
 }
 
