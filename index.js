@@ -81,6 +81,8 @@ async function main() {
         await performSwap(wallet, router, tokenIn, tokenOut);
       } catch (err) {
         console.error(`❌ Gagal swap ke-${i + 1}:`, err.message);
+				const balanceOk = await checkBalance(tokenIn, wallet, amountIn);
+if (!balanceOk) return;
       }
       await delay(DELAY_MS);
     }
