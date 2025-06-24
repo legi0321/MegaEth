@@ -1,16 +1,9 @@
 {
-  "name": "multiwallet-swap",
+  "name": "megaeth-swapper",
   "version": "1.0.0",
-  "description": "Multi-wallet swap script for MegaETH Testnet",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
-  "keywords": ["swap", "megaeth", "ethers", "web3", "multiwallet"],
-  "author": "",
-  "license": "ISC",
+  "type": "module",
   "dependencies": {
-    "dotenv": "^16.0.0",
-    "ethers": "^6.0.0"
+    "dotenv": "^16.3.1",
+    "ethers": "^5.7.2"
   }
 }
